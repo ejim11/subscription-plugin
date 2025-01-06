@@ -39,7 +39,9 @@ contract SubscriptionPlugin is BasePlugin {
     */
     mapping(address => uint256) public count;
 
-    struct SubcriptionData {
+    mapping (address => mapping (address => SubscriptionData)) public subscriptions;
+
+    struct SubscriptionData {
         uint amount; // native currency
         uint lastPaid;
         bool enabled;
@@ -53,8 +55,25 @@ contract SubscriptionPlugin is BasePlugin {
     // we define increment to modify our associated storage, count
     // then in the manifest we define it as an execution function,
     // and we specify the validation function for the user op targeting this function
-    function increment() external {
-        count[msg.sender]++;
+    
+    function subscribe(address service, uint amount) external {
+        subscriptions[service][msg.sender] = SubscriptionData(amount, 0, true);
+    }
+
+// direct call
+    function collect(address subscriber, uint amount) external {
+        SubscriptionData storage subscription = subscriptions[msg.sender][subscriber];
+
+        require(subscription.amount == amount);
+        require(block.timestamp - subscription.lastPaid >= 4 weeks);
+        require(subscription.enabled);
+        // amount is what is allowed
+        // last paid was over 4 weeks
+        // enabled
+        subscription.lastPaid = block.timestamp;
+
+        // plugin -> smart account -> collector with 10 native currency
+        IPluginExecutor(subscriber).executeFromPluginExternal(msg.sender, amount, '0x');
     }
 
     // ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -80,7 +99,7 @@ contract SubscriptionPlugin is BasePlugin {
         // we only have one execution function that can be called, which is the increment function
         // here we define that increment function on the manifest as something that can be called during execution
         manifest.executionFunctions = new bytes4[](1);
-        manifest.executionFunctions[0] = this.increment.selector;
+        manifest.executionFunctions[0] = this.subscribe.selector;
 
         // you can think of ManifestFunction as a reference to a function somewhere,
         // we want to say "use this function" for some purpose - in this case,
@@ -97,7 +116,7 @@ contract SubscriptionPlugin is BasePlugin {
         // this will ensure that only an owner of the account can call increment
         manifest.userOpValidationFunctions = new ManifestAssociatedFunction[](1);
         manifest.userOpValidationFunctions[0] = ManifestAssociatedFunction({
-            executionSelector: this.increment.selector,
+            executionSelector: this.subscribe.selector,
             associatedFunction: ownerUserOpValidationFunction
         });
 
@@ -106,13 +125,16 @@ contract SubscriptionPlugin is BasePlugin {
         // a runtime validation function for it and unauthorized calls may occur due to that
         manifest.preRuntimeValidationHooks = new ManifestAssociatedFunction[](1);
         manifest.preRuntimeValidationHooks[0] = ManifestAssociatedFunction({
-            executionSelector: this.increment.selector,
+            executionSelector: this.subscribe.selector,
             associatedFunction: ManifestFunction({
                 functionType: ManifestAssociatedFunctionType.PRE_HOOK_ALWAYS_DENY,
                 functionId: 0,
                 dependencyIndex: 0
             })
         });
+
+        manifest.permitAnyExternalAddress = true;
+        manifest.canSpendNativeToken = true; 
 
         return manifest;
     }
